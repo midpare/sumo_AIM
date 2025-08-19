@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- generated on 2025-08-07 21:04:08 by Eclipse SUMO netedit Version 1.18.0
+-->
+
+<routes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/routes_file.xsd">
+
+    <route id="n2s" edges="N2J J2S"/>
+    <route id="n2e" edges="N2J J2E"/>
+    <route id="n2w" edges="N2J J2W"/>
+
+    <route id="s2n" edges="S2J J2N"/>
+    <route id="s2e" edges="S2J J2E"/>
+    <route id="s2w" edges="S2J J2W"/>
+
+    <route id="e2n" edges="E2J J2N"/>
+    <route id="e2s" edges="E2J J2S"/>
+    <route id="e2w" edges="E2J J2W"/>
+
+    <route id="w2n" edges="W2J J2N"/>
+    <route id="w2s" edges="W2J J2S"/>
+    <route id="w2e" edges="W2J J2E"/>
+<!-- 
+    <flow id="flow_n2s" type="autonomous" route="n2s" begin="0" end="100" period="3"/>
+    <flow id="flow_n2e" type="autonomous" route="n2e" begin="0" end="100" period="3"/>
+    <flow id="flow_n2w" type="autonomous" route="n2w" begin="0" end="100" period="3"/>
+
+    <flow id="flow_s2n" type="autonomous" route="s2n" begin="0" end="100" period="3"/>
+    <flow id="flow_s2e" type="autonomous" route="s2e" begin="0" end="100" period="3"/>
+    <flow id="flow_s2w" type="autonomous" route="s2w" begin="0" end="100" period="3"/>
+
+    <flow id="flow_e2n" type="autonomous" route="e2n" begin="0" end="100" period="3"/>
+    <flow id="flow_e2s" type="autonomous" route="e2s" begin="0" end="100" period="3"/>
+    <flow id="flow_e2w" type="autonomous" route="e2w" begin="0" end="100" period="3"/>
+
+    <flow id="flow_w2n" type="autonomous" route="w2n" begin="0" end="100" period="3"/>
+    <flow id="flow_w2s" type="autonomous" route="w2s" begin="0" end="100" period="3"/>
+    <flow id="flow_w2e" type="autonomous" route="w2e" begin="0" end="100" period="3"/> -->
+
+
+    <vType id="autonomous" accel="2.5" decel="4.5" length="5" maxSpeed="15"
+       carFollowModel="Krauss" speedFactor="1.0" speedDev="0.0" timeToTeleport="-1"
+       minGap="0" tau="0.01"/>
+</routes>
