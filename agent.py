@@ -145,7 +145,7 @@ class D3QNAgent:
     def store(self, s, a, r, s_, done):
         self.replay_buffer.append((s, a, r, s_, done))
 
-    def train(self):
+    def train(self, print_q):
         if len(self.replay_buffer) < self.batch_size:
             return
 
@@ -168,7 +168,12 @@ class D3QNAgent:
             q_target = self.target_net(s_).gather(1, next_actions.unsqueeze(1)).squeeze(1)
             target = r + self.gamma * q_target * (1 - d)
 
-        loss = F.mse_loss(q_a, target)
+        if not print_q:
+            print(q_a[:10])
+            print(r[:10])
+            print(target[:10])
+            print("-"*50)
+        loss = F.smooth_l1_loss(q_a, target)
 
         self.optimizer.zero_grad()
         loss.backward()

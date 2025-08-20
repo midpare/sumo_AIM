@@ -11,13 +11,12 @@ custom_theme = Theme({
 })
 console = Console(theme=custom_theme)
 
-def log_scenario(idx, score, elapsed_s, ε, failure):
+def log_scenario(idx, rate, ε, failure):
     style = "fail" if failure else "ok"
     emoji = ":x:" if failure else ":white_check_mark:"
     console.print(
         f"{emoji}  Scenario [number]{idx}"
-        f" | score: [number]{score:+.1f}"
-        f" | steps: [number]{elapsed_s}"
+        f" | success: [number]{rate:.1f}%"
         f" | ε: {ε:.3f}",
         style=style
     )
