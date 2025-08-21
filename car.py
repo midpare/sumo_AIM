@@ -1,7 +1,7 @@
-import traci, traci.constants
 from agent import AgentType
 import numpy as np
 from enum import Enum, auto
+import libsumo
 
 class CarConfigStatus(Enum):
     Unconfigured = auto()
@@ -20,7 +20,7 @@ class Car:
 
         self.spawn()
 
-        self.entry, self.exit = traci.vehicle.getRoute(vehID)[:2]
+        self.entry, self.exit = libsumo.vehicle.getRoute(vehID)[:2]
         
         self.agent_type: AgentType = self.pick_agent()
         self.config_status: CarConfigStatus = CarConfigStatus.Unconfigured
@@ -45,20 +45,19 @@ class Car:
     def subscribe(self):
         self.config_status = CarConfigStatus.Configured
 
-        traci.vehicle.subscribe(self.vehID, [
-            traci.constants.VAR_POSITION,
-            traci.constants.VAR_SPEED,
-            traci.constants.VAR_ANGLE,
+        libsumo.vehicle.subscribe(self.vehID, [
+            libsumo.constants.VAR_POSITION,
+            libsumo.constants.VAR_SPEED,
         ])
 
     def spawn(self):
-        traci.vehicle.add(vehID=self.vehID, routeID=self.routeID, typeID=self.typeID, depart=self.depart)
-        traci.vehicle.setSpeedMode(self.vehID, 0)  # 차량 속도 모드 설정
-        traci.vehicle.setSpeed(self.vehID, 0.0)    # 초기
+        libsumo.vehicle.add(vehID=self.vehID, routeID=self.routeID, typeID=self.typeID, depart=self.depart)
+        libsumo.vehicle.setSpeedMode(self.vehID, 0)  # 차량 속도 모드 설정
+        libsumo.vehicle.setSpeed(self.vehID, 0.0)    # 초기
 
     def delete(self):
-        traci.vehicle.unsubscribe(self.vehID)
-        traci.vehicle.remove(self.vehID)
+        libsumo.vehicle.unsubscribe(self.vehID)
+        libsumo.vehicle.remove(self.vehID)
 
     def update_car_config_status(self, enter_r, exit_r):    
         if self.config_status == CarConfigStatus.Configured and self.d < enter_r:
@@ -69,13 +68,12 @@ class Car:
         return self.config_status
 
     def set_data(self, data):
-        self.x, self.y = data[traci.constants.VAR_POSITION]
-        self.speed = data[traci.constants.VAR_SPEED]
-        self.h = data[traci.constants.VAR_ANGLE]
+        self.x, self.y = data[libsumo.constants.VAR_POSITION]
+        self.speed = data[libsumo.constants.VAR_SPEED]
         self.d    = np.linalg.norm([self.x-self.jx, self.y-self.jy])
 
     def set_speed(self, speed):
-        traci.vehicle.setSpeed(self.vehID, speed)
+        libsumo.vehicle.setSpeed(self.vehID, speed)
 
     def set_action_history(self, state, action_index):
         self.action_history = state, action_index
@@ -103,7 +101,7 @@ class Car:
             case "E2J":
                 x, y = self.y - self.jy, self.jx - self.x
 
-        speed = np.clip(self.speed / 15.0, 0, 1.0)
+        speed = np.clip(self.speed, 0, 1.0)
 
         return [x, y, speed]
 

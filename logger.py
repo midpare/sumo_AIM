@@ -1,6 +1,6 @@
 # logger.py
+import sys
 from rich.console import Console
-from rich.table   import Table
 from rich.theme   import Theme
 
 custom_theme = Theme({
@@ -9,16 +9,33 @@ custom_theme = Theme({
     "title"  : "bold cyan",
     "number" : "bold yellow"
 })
-console = Console(theme=custom_theme)
 
-def log_scenario(idx, rate, ε, failure):
-    style = "fail" if failure else "ok"
-    emoji = ":x:" if failure else ":white_check_mark:"
+def create_console():
+    # TTY 환경인지 확인
+    if sys.stdout.isatty():
+        # 일반 터미널: Rich 모든 기능 사용
+        return Console(theme=custom_theme)
+    else:
+        # nohup/파이프 환경: 단순 출력
+        return Console(
+            theme=custom_theme,
+            force_terminal=False,
+            no_color=True,
+            highlight=False
+        )
+
+console = create_console()
+
+def log_scenario(idx, tot_reward, rate,  ε, time):
+    # style = "fail" if failure else "ok"
+    # emoji = ":x:" if failure else ":white_check_mark:"
     console.print(
-        f"{emoji}  Scenario [number]{idx}"
+        f"Scen: [number]{idx}"
+        f" | total reward: [number]{tot_reward:.5f}"
         f" | success: [number]{rate:.1f}%"
-        f" | ε: {ε:.3f}",
-        style=style
+        f" | ε: [number]{ε:.3f}",
+        f" | time: [number]{time:.3f}s",
+        style="ok"
     )
 
 def log_loss(idx, losses, epsilon):
