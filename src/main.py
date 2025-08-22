@@ -1,14 +1,12 @@
-# train.py
-import random, time
+import random, time, torch, libsumo, yaml
 import numpy as np
-import torch
-from agent import D3QNAgent, AgentType
-from logger import log_scenario, log_loss
-from car import CarConfigStatus, Car
+from box import Box
 from typing import cast
-from collections import deque
 from enum import Enum, auto
-import libsumo
+
+from agent import D3QNAgent, AgentType
+from logger import log_scenario
+from car import CarConfigStatus, Car
 
 class SimulationState(Enum):
     Collsion= auto()
@@ -18,65 +16,66 @@ class SimulationState(Enum):
 class AIM:
     def __init__(self) -> None:
         
-        # ---------- 환경 경로 ----------
-        self.SUMO_CFG    = "config.sumocfg"
+        conf_url = './config/car1_nbr3.yaml'
+        with open(conf_url, 'r') as f:
+            config_yaml = yaml.load(f, Loader=yaml.SafeLoader)
+            self.config = Box(config_yaml)
 
-        SEED = 11
 
-        random.seed(SEED)
-        np.random.seed(SEED)
-        torch.manual_seed(SEED)
-        torch.cuda.manual_seed_all(SEED)
+        random.seed(self.config.SEED)
+        np.random.seed(self.config.SEED)
+        torch.manual_seed(self.config.SEED)
+        torch.cuda.manual_seed_all(self.config.SEED)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark     = False
 
-        # ---------- 하이퍼파라미터 ----------
-        self.MAX_SCENARIOS    = 50_000       # 학습에 돌릴 총 시나리오 수
-        self.MAX_STEPS        = 3_00         # 시나리오 하나의 최대 step
-        self.TEMPERATURE      = 1.0           # PSR softmax 온도
-        self.BATCH_SIZE       = 256
-        self.EPS_START, self.EPS_END, self.EPS_DECAY = 1.0, 0.05, 5e-5
-        self.DEVICE           = "cuda" if torch.cuda.is_available() else "cpu"
-        self.ENTERED_RADIUS = 30.0   # 교차로에 ‘들어왔다’고 간주할 거리
-        self.EXITED_RADIUS  = 40.0   # 교차로를 ‘완전히 빠져나갔다’고 간주할 거리
-        self.J_POS = (44, 55)               # 교차로 중심(수동 입력)
-        self.LOG_INTERVAL = 100
+        self.DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+        self.cmd = 'sumo-gui' if self.config.USE_GUI else 'sumo'
 
-        self.GLOBAL_RANGE = 100
-        self.NBR_RANGE = 40
-        self.N_NBR = 5
-        self.MAX_SPEED = 15
-        self.DIVISION = 4
-        self.USE_GUI = False
-        self.N_CAR = 2
-
-        self.DT = 0.2
-        self.veh_speeds = [i * self.MAX_SPEED / (self.DIVISION - 1) for i in range(self.DIVISION)]
+        self.veh_speeds = [i * self.config.MAX_SPEED / (self.config.DIVISION - 1) for i in range(self.config.DIVISION)]
         print(self.veh_speeds)
         # ---------- Agent 3개 초기화 ----------
         self.agents = {
-            AgentType.LEFT: D3QNAgent("left", ego_dim=3, nbr_dim=2, n_nbr=self.N_NBR, n_actions=self.DIVISION, device=self.DEVICE),
-            AgentType.STRAIGHT: D3QNAgent("straight", ego_dim=3, nbr_dim=2, n_nbr=self.N_NBR, n_actions=self.DIVISION, device=self.DEVICE),
-            AgentType.RIGHT: D3QNAgent("right", ego_dim=3, nbr_dim=2, n_nbr=self.N_NBR, n_actions=self.DIVISION, device=self.DEVICE)
+            AgentType.LEFT: self.create_agent("left_agent"),
+            AgentType.STRAIGHT: self.create_agent("straight_agent"),
+            AgentType.RIGHT: self.create_agent("right_agent")
         }
 
-        self.cmd = 'sumo-gui' if self.USE_GUI else 'sumo'
-        self.config = [
-            "-c",self.SUMO_CFG,
-            "--step-length",f"{self.DT}",
-            "--no-warnings","true",
-            "--collision.action", "none",
-            # "--delay", "200",
-            "--no-step-log", "true",
-            "--verbose", "false",
-            "--start"
-        ]
-
-        self.epsilon = self.EPS_START
+        self.epsilon = self.config.EPS_START
+        self.DT = self.config.sumo_config.step_length # too long!
+        self.sim_cfg = self._build_sim_config()
     
-    # ---------- 시나리오 자동 생성 ----------
+    def _build_sim_config(self):
+        cfg = self.config.sumo_config
+        cmd = ["-c", cfg.config_file]
+        
+        cmd.extend(["--step-length", f"{self.DT}"])
+
+        for key, value in cfg.options.items():
+            option_name = f"--{key.replace('_', '-')}"
+            if isinstance(value, bool):
+                cmd.extend([option_name, str(value).lower()])
+            else:
+                cmd.extend([option_name, str(value)])
+        
+        return cmd
+    
+    def create_agent(self, name: str) -> D3QNAgent:
+        return D3QNAgent(
+            name,
+            ego_dim=self.config.EGO_DIM,
+            nbr_dim=self.config.NBR_DIM,
+            n_nbr=self.config.N_NBR,
+            n_actions=self.config.DIVISION,
+            mean_size=self.config.agent.mean_size,
+            gamma=self.config.agent.gamma,
+            batch_size=self.config.agent.batch_size,
+            update_freq=self.config.agent.update_freq,
+            per_cfg=self.config.agent.per_cfg,
+            device=self.DEVICE
+    )
+
     def spawn_scenario(self) -> dict[str, Car] :
-        """4 개 진입로(N/S/E/W)에서 1~4대씩 무작위로 진입"""
         cars={}
         route_opts = {
             "N":["n2s","n2e","n2w"],
@@ -86,20 +85,39 @@ class AIM:
         }    
 
         for prefix,routes in route_opts.items():
-            for i in range(self.N_CAR):
+            for i in range(self.config.N_CAR):
                 rid   = random.choice(routes)
                 vid   = f"{prefix}_{int(time.time()*1e6)%1_000_000}_{i}"
                 depart= cast(float, libsumo.simulation.getTime()) + i*2
 
-                car = Car(vehID=vid, routeID=rid, typeID="autonomous", depart=depart, j_pos=self.J_POS)
+                car = Car(vehID=vid, routeID=rid, typeID="autonomous", depart=depart, j_pos=self.config.J_POS)
 
                 cars[vid] = car
 
         return cars
+    
+    def parse_to_junction_oriented(self, entry, x, y): 
+        match entry:
+            case "N2J":
+                return self.config.J_POS[0] - x, self.config.J_POS[1] - y
+            case "W2J":
+                return self.config.J_POS[1] - y, x - self.config.J_POS[0]
+            case "S2J":
+                return x - self.config.J_POS[0], y - self.config.J_POS[1]
+            case "E2J":
+                return y - self.config.J_POS[1], self.config.J_POS[0] - x
+            case _:
+                return None, None
 
 # ---------- 보조 함수 ----------
     def state_of(self, vid, sub_ids, cars: dict[str, Car]):
-        x, y = cars[vid].get_pos()
+        ego_x, ego_y = cars[vid].get_pos()
+        entry = cars[vid].entry
+
+        ego_x, ego_y = self.parse_to_junction_oriented(entry, ego_x, ego_y)
+
+        if ego_x is None or ego_y is None:
+            raise Exception("no entry!")
         
         others = []
         for other_id in sub_ids:
@@ -108,31 +126,37 @@ class AIM:
             
             other_car = cars[other_id]
             ox, oy = other_car.get_pos()
+            ox, oy = self.parse_to_junction_oriented(entry, ox, oy)
 
-            distance = np.linalg.norm([x-ox, y-oy])
+            distance = np.linalg.norm([ego_x-ox, ego_y-oy])
 
-            if distance > self.NBR_RANGE:
+            if distance > self.config.NBR_RANGE:
                 continue
 
-            rel_x = (x-ox) / (self.NBR_RANGE * 2) + 0.5
-            rel_y = (y-oy) / (self.NBR_RANGE * 2) + 0.5
+            
+            ox = (ox - ego_x) / (self.config.NBR_RANGE * 2) + 0.5
+            oy = (oy - ego_y) / (self.config.NBR_RANGE * 2) + 0.5
 
-            others.append((distance, [rel_x, rel_y]))
+            if ox is None or oy is None:
+                raise Exception("no entry!")
         
-        data = cars[vid].get_junc_oriented_state()
+            others.append((distance, [ox, oy]))
         
-        data[0] = data[0] / (self.GLOBAL_RANGE * 2) + 0.5
-        data[1] = data[1] / (self.GLOBAL_RANGE * 2) + 0.5
-        data[2] = data[2] / self.MAX_SPEED
+        
+        data = [0 for _ in range(self.config.EGO_DIM + self.config.N_NBR*self.config.NBR_DIM)]
+        data[0] = ego_x /(self.config.GLOBAL_RANGE * 2) + 0.5
+        data[1] = ego_y / (self.config.GLOBAL_RANGE * 2) + 0.5
+        data[2] = cars[vid].speed / self.config.MAX_SPEED
 
-        closest_10 = sorted(others)[:self.N_NBR]
+        closest_10 = sorted(others)[:self.config.N_NBR]
         
-        while len(closest_10) < self.N_NBR:
+        while len(closest_10) < self.config.N_NBR:
             closest_10.append((float('inf'), [0.0, 0.0]))
-        for _, other_data in closest_10:
-            data.extend(other_data)
-        
-        return np.array(data, dtype=np.float32)
+        for i, (_, (ox, oy)) in enumerate(closest_10):             
+            data[self.config.EGO_DIM + i*self.config.NBR_DIM] = ox
+            data[self.config.EGO_DIM + i*self.config.NBR_DIM+1] = oy
+                    
+        return np.array(data, dtype=np. float32)
 
     def check_collision(self, vid, sub_ids, cars: dict[str, Car], thr=3.0):
         if vid not in sub_ids:
@@ -176,21 +200,11 @@ class AIM:
 
         return list(all_sub_results.keys())
 
-    def train(self):
-        losses = []
-        for agent_type in AgentType:
-            loss = self.agents[agent_type].train()
-            losses.append(loss) if not loss is None else None 
-
-        return losses
 
     def simulate_single(self, cars, is_train=True):
         step = 0
         tot_reward = 0
-        losses = []
-        print_q = False
-        while step < self.MAX_STEPS:
-            start_time = time.time()
+        while step < self.config.MAX_STEPS:
             libsumo.simulationStep()
             step += 1
 
@@ -209,7 +223,7 @@ class AIM:
                     continue
                 
                 collision_flag |= self.check_collision(vid, sub_ids, cars)
-                exited_flag = car.update_car_config_status(self.ENTERED_RADIUS, self.EXITED_RADIUS) == CarConfigStatus.Exited
+                exited_flag = car.update_car_config_status(self.config.ENTERED_RADIUS, self.config.EXITED_RADIUS) == CarConfigStatus.Exited
 
                 next_s = self.state_of(vid, sub_ids, cars)
 
@@ -236,7 +250,9 @@ class AIM:
             self.proceed_action(sub_ids, cars, is_train)
             
             if is_train:
-                losses = self.train()
+                for agent_type in AgentType:
+                    self.agents[agent_type].train()
+
 
 
         return SimulationState.NotEnd, tot_reward
@@ -247,7 +263,7 @@ class AIM:
         rewards = np.array([])
 
         for _ in range(n_episodes):
-            libsumo.load(self.config)
+            libsumo.load(self.sim_cfg)
 
             cars = self.spawn_scenario()
             result, tot_reward = self.simulate_single(cars, False)  # 탐험 없음
@@ -259,32 +275,25 @@ class AIM:
         return np.mean(rewards), successes / n_episodes * 100
 
     def start(self):
-        libsumo.start([self.cmd] + self.config)  # 시나리오 시작
-        # explore_success = np.array()
-        # rewards = np.array()
+        libsumo.start([self.cmd] + self.sim_cfg)  # 시나리오 시작
+
         start_time = time.time()
-        for scen_idx in range(1, self.MAX_SCENARIOS+1):
+        for scen_idx in range(1, self.config.MAX_SCENARIOS+1):
             cars = self.spawn_scenario()                       # 차량 배치
-            result, tot_reward = self.simulate_single(cars)
+            result, _ = self.simulate_single(cars)
 
             if result == SimulationState.NotEnd:
                 raise Exception(f'scenario not end in id:{scen_idx}')
 
-            # idx = scen_idx % self.LOG_INTERVAL
-            # explore_success[idx] = result
-            # rewards[idx] = tot_reward
-
-            # explore_success_rate = explore_success.count(SimulationState.Clear) / len(explore_success) if len(explore_success) > 0 else 0
-            # avg_reward = np.mean(rewards)
-            if scen_idx % self.LOG_INTERVAL == 0:
+            if scen_idx % self.config.LOG_INTERVAL == 0:
                 avg_reward, success_rate = self.evaluate_policy(20)
 
                 cur = time.time()
                 log_scenario(scen_idx, avg_reward, success_rate, self.epsilon, cur - start_time)
                 start_time = cur
 
-            self.epsilon = max(self.EPS_END, self.epsilon-self.EPS_DECAY)
-            libsumo.load(self.config)
+            self.epsilon = max(self.config.EPS_END, self.epsilon - self.config.EPS_DECAY)
+            libsumo.load(self.sim_cfg)
 
 
 aim = AIM()

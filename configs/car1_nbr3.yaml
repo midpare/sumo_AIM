@@ -1,0 +1,42 @@
+agent:
+  mean_size: 10000
+  gamma: 0.99
+  update_freq: 1000
+  batch_size      : 256
+  per_cfg:
+    capacity: 150000
+    alpha: 0.6
+    beta: 0.4
+    beta_increment: 0.000006
+
+MAX_SCENARIOS   : 50000       # 학습에 돌릴 총 시나리오 수
+MAX_STEPS       : 300
+EPS_START       : 1.0
+EPS_END         : 0.05
+EPS_DECAY       : 0.00005
+
+ENTERED_RADIUS  : 30.0   # 교차로에 ‘들어왔다’고 간주할 거리
+EXITED_RADIUS   : 40.0   # 교차로를 ‘완전히 빠져나갔다’고 간주할 거리
+N_CAR: 1
+EGO_DIM: 3
+NBR_DIM: 2
+N_NBR: 3
+MAX_SPEED: 15
+DIVISION: 4
+GLOBAL_RANGE: 100
+NBR_RANGE: 40
+
+LOG_INTERVAL: 100
+J_POS: [44, 55]             # 교차로 중심(수동 입력)
+USE_GUI: False
+SEED: 11
+
+sumo_config:
+  config_file: "../config.sumocfg"
+  step_length: 0.2  # DT 값을 동적으로 설정
+  options:
+    no_warnings: true
+    collision.action: "none"
+    no_step_log: true
+    verbose: false
+    start: true

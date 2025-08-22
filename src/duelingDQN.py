@@ -1,4 +1,4 @@
-import torch, time
+import torch
 import torch.nn as nn
 
 class DuelingDQN(nn.Module):

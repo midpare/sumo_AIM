@@ -1,7 +1,8 @@
-from agent import AgentType
+import libsumo
 import numpy as np
 from enum import Enum, auto
-import libsumo
+
+from agent import AgentType
 
 class CarConfigStatus(Enum):
     Unconfigured = auto()
@@ -89,21 +90,6 @@ class Car:
     def get_pos(self):
         return self.x, self.y
 
-    def get_junc_oriented_state(self):
-        x, y = 0,0
-        match self.entry:
-            case "N2J":
-                x, y = self.jx - self.x, self.jy - self.y
-            case "W2J":
-                x, y = self.jy - self.y, self.x - self.jx
-            case "S2J":
-                x, y = self.x - self.jx, self.y - self.jx
-            case "E2J":
-                x, y = self.y - self.jy, self.jx - self.x
-
-        speed = np.clip(self.speed, 0, 1.0)
-
-        return [x, y, speed]
 
     def is_unconfigured(self):
         return self.config_status == CarConfigStatus.Unconfigured
