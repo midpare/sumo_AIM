@@ -5,7 +5,6 @@ from enum import Enum
 from duelingDQN import DuelingDQN
 from replayBuffer import PrioritizedReplayBuffer
 
-
 class AgentType(Enum):
     LEFT = "left"
     STRAIGHT = "straight" 
@@ -54,8 +53,9 @@ class D3QNAgent:
 
     def store(self, s, a, r, s_, done):
         self.replay_buffer.add(s, a, r, s_, done)
+        
 
-    def train(self):
+    def train(self, get_result=False):
         if len(self.replay_buffer) < self.mean_size:
             return
         
@@ -105,16 +105,27 @@ class D3QNAgent:
     
                 
         self.step += 1
+
         if self.step % self.update_freq == 0:
-            per_state_variance = torch.var(q_values_tensor, dim=1).detach().cpu().numpy()
-            per_state_mean = torch.mean(q_values_tensor, dim=1).detach().cpu().numpy()
-            avg_td_error = torch.mean(td_errors).detach().cpu().numpy()
-
-            avg_variance = np.mean(per_state_variance)
-            avg_mean = np.mean(per_state_mean)
-
-            print(f"name: {self.name}, step: {self.step}, Q-variance = {avg_variance:.4f}, "
-                f"Q-mean = {avg_mean:.4f}, TD-error = {avg_td_error:.4f}, "
-                f"β = {self.replay_buffer.beta:.3f}")
-            print("-" * 70)
             self.target_net.load_state_dict(self.q_net.state_dict())
+        
+        if get_result:
+            per_state_std, per_state_mean= torch.std_mean(q_values_tensor, dim=1)
+
+            avg_std = np.mean(per_state_std.detach().cpu().numpy())
+            avg_mean = np.mean(per_state_mean.detach().cpu().numpy())
+            avg_td_error = np.mean(td_errors.detach().cpu().numpy())
+
+            data = {
+                "step": self.step, 
+                "Q-std": avg_std,
+                "Q-mean": avg_mean,
+                "TD-error": avg_td_error,
+                "beta": self.replay_buffer.beta,
+            }
+            return data
+            # print(f"name: {self.name}, step: {self.step}, Q-variance = {avg_variance:.4f}, "
+            #     f"Q-mean = {avg_mean:.4f}, TD-error = {avg_td_error:.4f}, "
+            #     f"β = {self.replay_buffer.beta:.3f}")
+            # print("-" * 70)
+        return None

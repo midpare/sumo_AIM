@@ -1,4 +1,8 @@
-import random, time, torch, libsumo, yaml
+import random
+import time
+import torch
+import libsumo
+import yaml
 import numpy as np
 from box import Box
 from typing import cast
@@ -7,6 +11,7 @@ from enum import Enum, auto
 from agent import D3QNAgent, AgentType
 from logger import log_scenario
 from car import CarConfigStatus, Car
+from visualize import plot_agent_performance
 
 class SimulationState(Enum):
     Collsion= auto()
@@ -16,7 +21,7 @@ class SimulationState(Enum):
 class AIM:
     def __init__(self) -> None:
         
-        conf_url = './config/car1_nbr3.yaml'
+        conf_url = './configs/car1_nbr3.yaml'
         with open(conf_url, 'r') as f:
             config_yaml = yaml.load(f, Loader=yaml.SafeLoader)
             self.config = Box(config_yaml)
@@ -36,9 +41,9 @@ class AIM:
         print(self.veh_speeds)
         # ---------- Agent 3개 초기화 ----------
         self.agents = {
-            AgentType.LEFT: self.create_agent("left_agent"),
-            AgentType.STRAIGHT: self.create_agent("straight_agent"),
-            AgentType.RIGHT: self.create_agent("right_agent")
+            AgentType.LEFT: self.create_agent(AgentType.LEFT.value),
+            AgentType.STRAIGHT: self.create_agent(AgentType.STRAIGHT.value),
+            AgentType.RIGHT: self.create_agent(AgentType.RIGHT.value)
         }
 
         self.epsilon = self.config.EPS_START
@@ -96,7 +101,7 @@ class AIM:
 
         return cars
     
-    def parse_to_junction_oriented(self, entry, x, y): 
+    def parse_to_junction_oriented(self, entry, x, y):
         match entry:
             case "N2J":
                 return self.config.J_POS[0] - x, self.config.J_POS[1] - y
@@ -109,7 +114,6 @@ class AIM:
             case _:
                 return None, None
 
-# ---------- 보조 함수 ----------
     def state_of(self, vid, sub_ids, cars: dict[str, Car]):
         ego_x, ego_y = cars[vid].get_pos()
         entry = cars[vid].entry
@@ -200,10 +204,11 @@ class AIM:
 
         return list(all_sub_results.keys())
 
-
-    def simulate_single(self, cars, is_train=True):
+    def simulate_single(self, cars, scen_idx, is_train=True):
         step = 0
         tot_reward = 0
+        data = {}
+        already = {i : False for i in AgentType}
         while step < self.config.MAX_STEPS:
             libsumo.simulationStep()
             step += 1
@@ -240,22 +245,27 @@ class AIM:
                 if is_train:
                     self.agents[car.agent_type].store(s, a_idx, reward, next_s, collision_flag | exited_flag)
                 tot_reward += reward
+            
+
+            if is_train:
+                flag = (scen_idx % self.config.LOG_INTERVAL) == 0
+                for agent_type in AgentType:
+                    flag &= not already[agent_type]
+                    result = self.agents[agent_type].train(get_result=flag)
+
+                    if flag:
+                        data[agent_type] = result
+                    already[agent_type] = True
 
             if collision_flag:
-                return SimulationState.Collsion, tot_reward
+                return SimulationState.Collsion, tot_reward, data
             elif all(car.is_exited() for car in cars.values()):
-                return SimulationState.Clear, tot_reward
+                return SimulationState.Clear, tot_reward, data
             
 
             self.proceed_action(sub_ids, cars, is_train)
             
-            if is_train:
-                for agent_type in AgentType:
-                    self.agents[agent_type].train()
-
-
-
-        return SimulationState.NotEnd, tot_reward
+        return SimulationState.NotEnd, tot_reward, data
 
     def evaluate_policy(self, n_episodes):
         """표준 정책 평가 (ε=0)"""
@@ -266,7 +276,7 @@ class AIM:
             libsumo.load(self.sim_cfg)
 
             cars = self.spawn_scenario()
-            result, tot_reward = self.simulate_single(cars, False)  # 탐험 없음
+            result, tot_reward, _ = self.simulate_single(cars, 0, False)  # 탐험 없음
             if result == SimulationState.Clear:
                 successes += 1
             
@@ -278,15 +288,54 @@ class AIM:
         libsumo.start([self.cmd] + self.sim_cfg)  # 시나리오 시작
 
         start_time = time.time()
+        data = {
+            "episodes": [],
+            'success_rate': [], 
+            'total_reward': [],
+            **{agent.value: {
+                'Q-mean': [],
+                'Q-std': [],
+                'TD-error': [],
+                'step': 0
+            } for agent in AgentType}
+        }        
+        
         for scen_idx in range(1, self.config.MAX_SCENARIOS+1):
             cars = self.spawn_scenario()                       # 차량 배치
-            result, _ = self.simulate_single(cars)
+            result, _, training_data = self.simulate_single(cars, scen_idx)
 
             if result == SimulationState.NotEnd:
                 raise Exception(f'scenario not end in id:{scen_idx}')
+            
+            for name, values in training_data.items():
+                if not values:
+                    continue
+
+                log_parts = [f"name: {name.value}"]
+                for idx, value in values.items():
+                    if value is None:
+                        continue
+                    
+
+                    if isinstance(value, (float, np.floating)):
+                        log_parts.append(f"{idx}: {value:.4f}")
+                    else:
+                        log_parts.append(f"{idx}: {value}")
+
+                    if idx == "step":
+                        data[name.value][idx] = value
+                    elif idx == "Q-mean" or idx == "Q-std" or idx == "TD-error":
+                        data[name.value][idx].append(value)
+
+                if log_parts:
+                    print(", ".join(log_parts))
 
             if scen_idx % self.config.LOG_INTERVAL == 0:
-                avg_reward, success_rate = self.evaluate_policy(20)
+                avg_reward, success_rate = self.evaluate_policy(50)
+
+                data["episodes"].append(scen_idx)
+                data["total_reward"].append(avg_reward)
+                data["success_rate"].append(success_rate)
 
                 cur = time.time()
                 log_scenario(scen_idx, avg_reward, success_rate, self.epsilon, cur - start_time)
@@ -294,6 +343,13 @@ class AIM:
 
             self.epsilon = max(self.config.EPS_END, self.epsilon - self.config.EPS_DECAY)
             libsumo.load(self.sim_cfg)
+
+        for agent_type in AgentType:
+            torch.save(self.agents[agent_type].q_net.state_dict(), f"./{agent_type.value}_weight.pth")
+            print(f"save parameter! name: {agent_type.value}")
+
+        print(data)
+        plot_agent_performance(data, "agent_performance.png")
 
 
 aim = AIM()

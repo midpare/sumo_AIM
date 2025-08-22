@@ -3,10 +3,10 @@ from rich.console import Console
 from rich.theme   import Theme
 
 custom_theme = Theme({
-    "ok"     : "bold green",
-    "fail"   : "bold red",
-    "title"  : "bold cyan",
-    "number" : "bold yellow"
+    "ok": "bold green",
+    "fail": "bold red",
+    "title": "bold cyan",
+    "number": "bold yellow"
 })
 
 def create_console():

@@ -2,14 +2,14 @@ agent:
   mean_size: 10000
   gamma: 0.99
   update_freq: 1000
-  batch_size      : 256
+  batch_size: 256
   per_cfg:
     capacity: 150000
     alpha: 0.6
     beta: 0.4
-    beta_increment: 0.000006
+    beta_increment: 0.000001
 
-MAX_SCENARIOS   : 50000       # 학습에 돌릴 총 시나리오 수
+MAX_SCENARIOS   : 30000       # 학습에 돌릴 총 시나리오 수
 MAX_STEPS       : 300
 EPS_START       : 1.0
 EPS_END         : 0.05
@@ -32,7 +32,7 @@ USE_GUI: False
 SEED: 11
 
 sumo_config:
-  config_file: "../config.sumocfg"
+  config_file: "./config.sumocfg"
   step_length: 0.2  # DT 값을 동적으로 설정
   options:
     no_warnings: true
