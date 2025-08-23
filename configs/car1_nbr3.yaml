@@ -3,6 +3,7 @@ agent:
   gamma: 0.99
   update_freq: 1000
   batch_size: 256
+  lr: 0.0001
   per_cfg:
     capacity: 150000
     alpha: 0.6

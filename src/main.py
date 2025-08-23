@@ -76,6 +76,7 @@ class AIM:
             gamma=self.config.agent.gamma,
             batch_size=self.config.agent.batch_size,
             update_freq=self.config.agent.update_freq,
+            lr = self.config.agent.lr,
             per_cfg=self.config.agent.per_cfg,
             device=self.DEVICE
     )

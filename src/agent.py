@@ -11,7 +11,7 @@ class AgentType(Enum):
     RIGHT = "right"
     
 class D3QNAgent:
-    def __init__(self, name, ego_dim, nbr_dim, n_nbr, n_actions, mean_size, gamma, batch_size, update_freq, per_cfg, device='cuda'):
+    def __init__(self, name, ego_dim, nbr_dim, n_nbr, n_actions, mean_size, gamma, batch_size, update_freq, lr, per_cfg, device='cuda'):
         self.name = name
         self.device = device
         self.n_actions = n_actions
@@ -31,7 +31,7 @@ class D3QNAgent:
         self.target_net = DuelingDQN(ego_dim=ego_dim, nbr_dim=nbr_dim, n_actions=n_actions).to(device)
         self.target_net.load_state_dict(self.q_net.state_dict())    
 
-        self.optimizer = torch.optim.RMSprop(self.q_net.parameters(), lr=1e-3)
+        self.optimizer = torch.optim.RMSprop(self.q_net.parameters(), lr=lr)
 
         self.replay_buffer = PrioritizedReplayBuffer(
             capacity=per_cfg.capacity,
