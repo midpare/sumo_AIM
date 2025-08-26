@@ -2,7 +2,7 @@ import libsumo
 import numpy as np
 from enum import Enum, auto
 
-from agent import AgentType
+from agent2 import AgentType
 
 class CarConfigStatus(Enum):
     Unconfigured = auto()
@@ -12,12 +12,12 @@ class CarConfigStatus(Enum):
 
 class Car:
     def __init__(self, vehID, routeID, typeID, depart, j_pos):
-
         self.vehID = vehID
         self.routeID = routeID
         self.typeID = typeID
         self.depart = depart
         self.jx, self.jy = j_pos
+        self.state = []
 
         self.spawn()
 
@@ -53,8 +53,8 @@ class Car:
 
     def spawn(self):
         libsumo.vehicle.add(vehID=self.vehID, routeID=self.routeID, typeID=self.typeID, depart=self.depart)
-        libsumo.vehicle.setSpeedMode(self.vehID, 0)  # 차량 속도 모드 설정
-        libsumo.vehicle.setSpeed(self.vehID, 0.0)    # 초기
+        libsumo.vehicle.setSpeedMode(self.vehID, 0)
+        libsumo.vehicle.setSpeed(self.vehID, 0)
 
     def delete(self):
         libsumo.vehicle.unsubscribe(self.vehID)
@@ -78,7 +78,7 @@ class Car:
 
     def set_action_history(self, state, action_index):
         self.action_history = state, action_index
-
+    
     def get_action_history(self):
         if self.action_history is None:
             return None, None

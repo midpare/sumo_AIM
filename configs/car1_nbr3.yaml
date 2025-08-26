@@ -5,13 +5,13 @@ agent:
   batch_size: 256
   lr: 0.0001
   per_cfg:
-    capacity: 150000
+    capacity: 1500000
     alpha: 0.6
     beta: 0.4
     beta_increment: 0.000001
 
 MAX_SCENARIOS   : 30000       # 학습에 돌릴 총 시나리오 수
-MAX_STEPS       : 300
+MAX_STEPS       : 1000
 EPS_START       : 1.0
 EPS_END         : 0.05
 EPS_DECAY       : 0.00005

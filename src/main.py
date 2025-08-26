@@ -8,7 +8,7 @@ from box import Box
 from typing import cast
 from enum import Enum, auto
 
-from agent import D3QNAgent, AgentType
+from agent2 import D3QNAgent, AgentType
 from logger import log_scenario
 from car import CarConfigStatus, Car
 from visualize import plot_agent_performance
@@ -20,26 +20,33 @@ class SimulationState(Enum):
 
 class AIM:
     def __init__(self) -> None:
-        
+        self.load_config()
+        self.setup_environment()
+        self.initialize_agents()
+        self.setup_simulation()
+
+    def load_config(self):
         conf_url = './configs/car1_nbr3.yaml'
         with open(conf_url, 'r') as f:
             config_yaml = yaml.load(f, Loader=yaml.SafeLoader)
             self.config = Box(config_yaml)
 
-
+    def setup_environment(self):
         random.seed(self.config.SEED)
         np.random.seed(self.config.SEED)
         torch.manual_seed(self.config.SEED)
         torch.cuda.manual_seed_all(self.config.SEED)
         torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark     = False
+        torch.backends.cudnn.benchmark = False
 
         self.DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
         self.cmd = 'sumo-gui' if self.config.USE_GUI else 'sumo'
 
-        self.veh_speeds = [i * self.config.MAX_SPEED / (self.config.DIVISION - 1) for i in range(self.config.DIVISION)]
-        print(self.veh_speeds)
-        # ---------- Agent 3개 초기화 ----------
+    def initialize_agents(self):
+        self.veh_speeds = [i * self.config.MAX_SPEED / (self.config.DIVISION - 1) 
+                          for i in range(self.config.DIVISION)]
+        
+        self.logged_agents = set()
         self.agents = {
             AgentType.LEFT: self.create_agent(AgentType.LEFT.value),
             AgentType.STRAIGHT: self.create_agent(AgentType.STRAIGHT.value),
@@ -47,24 +54,11 @@ class AIM:
         }
 
         self.epsilon = self.config.EPS_START
-        self.DT = self.config.sumo_config.step_length # too long!
-        self.sim_cfg = self._build_sim_config()
-    
-    def _build_sim_config(self):
-        cfg = self.config.sumo_config
-        cmd = ["-c", cfg.config_file]
-        
-        cmd.extend(["--step-length", f"{self.DT}"])
 
-        for key, value in cfg.options.items():
-            option_name = f"--{key.replace('_', '-')}"
-            if isinstance(value, bool):
-                cmd.extend([option_name, str(value).lower()])
-            else:
-                cmd.extend([option_name, str(value)])
-        
-        return cmd
-    
+    def setup_simulation(self):
+        self.DT = self.config.sumo_config.step_length
+        self.sim_cfg = self.build_sim_config()
+
     def create_agent(self, name: str) -> D3QNAgent:
         return D3QNAgent(
             name,
@@ -81,7 +75,22 @@ class AIM:
             device=self.DEVICE
     )
 
-    def spawn_scenario(self) -> dict[str, Car] :
+    def build_sim_config(self):
+        cfg = self.config.sumo_config
+        cmd = ["-c", cfg.config_file]
+        
+        cmd.extend(["--step-length", f"{self.DT}"])
+
+        for key, value in cfg.options.items():
+            option_name = f"--{key.replace('_', '-')}"
+            if isinstance(value, bool):
+                cmd.extend([option_name, str(value).lower()])
+            else:
+                cmd.extend([option_name, str(value)])
+        
+        return cmd
+    
+    def spawn_scenario(self) -> dict[str, Car]:
         cars={}
         route_opts = {
             "N":["n2s","n2e","n2w"],
@@ -137,7 +146,6 @@ class AIM:
 
             if distance > self.config.NBR_RANGE:
                 continue
-
             
             ox = (ox - ego_x) / (self.config.NBR_RANGE * 2) + 0.5
             oy = (oy - ego_y) / (self.config.NBR_RANGE * 2) + 0.5
@@ -179,117 +187,202 @@ class AIM:
                 return True
         return False
 
-    def check_departed(self, cars: dict[str, Car]):
-        for vid in libsumo.simulation.getDepartedIDList():
-            if not cars[vid].is_unconfigured():
-                continue
+    def update_vehicle_states(self, cars: dict[str, Car]):
+        if any(car.is_unconfigured() for car in cars.values()):
+            for vid in libsumo.simulation.getDepartedIDList():
+                if cars[vid].is_unconfigured():
+                    cars[vid].subscribe()
 
-            cars[vid].subscribe()
-
-    def proceed_action(self, sub_ids, cars: dict[str, Car], is_train):
-        for vid in sub_ids:
-            car = cars[vid]
-            s = self.state_of(vid, sub_ids, cars)
-            epsilon = self.epsilon if is_train else 0
-            a_idx = self.agents[car.agent_type].select_action(s, epsilon)            
-
-            car.set_speed(self.veh_speeds[a_idx])
-            car.set_action_history(s, a_idx)
-
-    def set_cars_data(self, cars: dict[str, Car]):
         all_sub_results = libsumo.vehicle.getAllSubscriptionResults()
-
         for vid, data in all_sub_results.items():
-            car = cars[vid]
-            car.set_data(data)
+            if vid in cars:
+                cars[vid].set_data(data)
 
         return list(all_sub_results.keys())
 
-    def simulate_single(self, cars, scen_idx, is_train=True):
-        step = 0
-        tot_reward = 0
-        data = {}
-        already = {i : False for i in AgentType}
-        while step < self.config.MAX_STEPS:
-            libsumo.simulationStep()
-            step += 1
+    def log_training_progress(self, training_results: dict, data: dict):
+        for agent_type, values in training_results.items():
+            if not values:
+                continue
 
-            if any(car.is_unconfigured() for car in cars.values()):
-                self.check_departed(cars)
-
-            sub_ids = self.set_cars_data(cars)
-
-            collision_flag = False
-
-            for vid in sub_ids:
-                car = cars[vid]
-                s, a_idx = car.get_action_history()
-
-                if s is None or a_idx is None:
+            log_parts = [f"name: {agent_type.value}"]
+            
+            for metric, value in values.items():
+                if value is None:
                     continue
                 
-                collision_flag |= self.check_collision(vid, sub_ids, cars)
-                exited_flag = car.update_car_config_status(self.config.ENTERED_RADIUS, self.config.EXITED_RADIUS) == CarConfigStatus.Exited
+                if isinstance(value, (float, np.floating)):
+                    log_parts.append(f"{metric}: {value:.4f}")
+                else:
+                    log_parts.append(f"{metric}: {value}")
 
-                next_s = self.state_of(vid, sub_ids, cars)
+                if metric == "step":
+                    data[agent_type.value][metric] = value
+                elif metric in ["Q-mean", "Q-std", "TD-error"]:
+                    data[agent_type.value][metric].append(value)
 
-                scale = 1
-                reward  = self.veh_speeds[a_idx] * self.DT/5 if self.veh_speeds[a_idx]>0 else -scale/5
+            if len(log_parts) > 1:
+                print(", ".join(log_parts))
+
+    def evaluate_and_log_performance(self, scen_idx: int, data: dict, start_time: float) -> float:
+        avg_reward, success_rate, avg_step = self.evaluate_policy(20)
+
+        data["episodes"].append(scen_idx)
+        data["total_reward"].append(avg_reward)
+        data["success_rate"].append(success_rate)
+
+        current_time = time.time()
+        log_scenario(scen_idx, avg_reward, success_rate, avg_step, self.epsilon, current_time - start_time)
+        
+        return current_time
+    
+    def select_and_execute_actions(self, cars: dict[str, Car], sub_ids: list[str]):
+        for vid in sub_ids:
+            if vid not in cars:
+                continue
                 
-                if collision_flag:
-                    reward = - 50.0 * scale
-                if exited_flag:
-                    reward = 10.0 * scale
-                    car.delete()
+            car = cars[vid]
+            if not car.config_status == CarConfigStatus.Configured:
+                car.set_speed(self.veh_speeds[2])
+                continue
+
+            current_state = self.state_of(vid, sub_ids, cars)
+            action_idx = self.agents[car.agent_type].select_action(current_state, self.epsilon)
+            
+            car.set_speed(self.veh_speeds[action_idx])
+            car.set_action_history(current_state, action_idx)
+
+    def process_transitions_and_train(self, cars: dict[str, Car], sub_ids: list[str], scen_idx: int):
+        should_log_scenario = (scen_idx % self.config.LOG_INTERVAL) == 0
+        training_results = {}
+        collision_occurred = False
+
+        for vid in list(sub_ids):
+            if vid not in cars:
+                continue
+                
+            car = cars[vid]
+            prev_state, prev_action = car.get_action_history()
+            
+            if prev_state is None or prev_action is None:
+                continue
+            
+            current_state = self.state_of(vid, sub_ids, cars)
+            config_status = car.update_car_config_status(self.config.ENTERED_RADIUS, self.config.EXITED_RADIUS)
+
+            is_collision = self.check_collision(vid, sub_ids, cars)
+            is_exited = (config_status == CarConfigStatus.Exited)
+            done = is_collision or is_exited
+            
+            reward = self.calculate_reward(prev_action, is_collision, is_exited)
+            
+            collision_occurred |= is_collision
+            
+            agent = self.agents[car.agent_type]
+            
+            if config_status == (CarConfigStatus.Entered or CarConfigStatus.Exited):
+                agent.store(prev_state, prev_action, reward, current_state, done)
+
+            if is_exited:
+                car.delete()
+                if vid in sub_ids:
                     sub_ids.remove(vid)
 
-                if is_train:
-                    self.agents[car.agent_type].store(s, a_idx, reward, next_s, collision_flag | exited_flag)
-                tot_reward += reward
+        for agent_type, agent in self.agents.items():
+            should_log = should_log_scenario and agent_type not in self.logged_agents
+
+            result = agent.train(store_result=should_log)
+            if should_log and result:
+                training_results[agent_type] = result
+                self.logged_agents.add(agent_type)
+                 
+        return training_results, collision_occurred
+        
+    def calculate_reward(self, action_idx: int, is_collision: bool, is_exited: bool) -> float:
+        if is_collision:
+            reward = -10.0
+        elif is_exited:
+            reward = 4.0
+        else:
+            reward = self.veh_speeds[action_idx] * self.DT / 5 if self.veh_speeds[action_idx] > 0 else -0.1
             
+        return reward
 
-            if is_train:
-                flag = (scen_idx % self.config.LOG_INTERVAL) == 0
-                for agent_type in AgentType:
-                    flag &= not already[agent_type]
-                    result = self.agents[agent_type].train(get_result=flag)
-
-                    if flag:
-                        data[agent_type] = result
-                    already[agent_type] = True
-
-            if collision_flag:
-                return SimulationState.Collsion, tot_reward, data
-            elif all(car.is_exited() for car in cars.values()):
-                return SimulationState.Clear, tot_reward, data
-            
-
-            self.proceed_action(sub_ids, cars, is_train)
-            
-        return SimulationState.NotEnd, tot_reward, data
+    def check_termination_conditions(self, cars: dict[str, Car], collision_occurred: bool) -> SimulationState:
+        if collision_occurred:
+            return SimulationState.Collsion
+        elif all(car.is_exited() for car in cars.values()):
+            return SimulationState.Clear
+        else:
+            return SimulationState.NotEnd
 
     def evaluate_policy(self, n_episodes):
-        """표준 정책 평가 (ε=0)"""
         successes = 0
-        rewards = np.array([])
-
+        rewards = []
+        steps = 0
         for _ in range(n_episodes):
             libsumo.load(self.sim_cfg)
-
             cars = self.spawn_scenario()
-            result, tot_reward, _ = self.simulate_single(cars, 0, False)  # 탐험 없음
-            if result == SimulationState.Clear:
-                successes += 1
             
-            rewards = np.append(rewards, tot_reward)
+            step = 0
+            total_reward = 0
             
-        return np.mean(rewards), successes / n_episodes * 100
+            while step < self.config.MAX_STEPS:
+                libsumo.simulationStep()
+                step += 1
 
-    def start(self):
-        libsumo.start([self.cmd] + self.sim_cfg)  # 시나리오 시작
+                sub_ids = self.update_vehicle_states(cars)
+                collision_flag = False
 
-        start_time = time.time()
-        data = {
+                for vid in list(sub_ids):
+                    if vid not in cars:
+                        continue
+                        
+                    car = cars[vid]
+                    prev_state, prev_action = car.get_action_history()
+
+                    if prev_state is not None and prev_action is not None:
+                        current_state = self.state_of(vid, sub_ids, cars)
+
+                        config_status = car.update_car_config_status(self.config.ENTERED_RADIUS, self.config.EXITED_RADIUS)
+
+                        is_collision = self.check_collision(vid, sub_ids, cars)
+                        is_exited = (config_status == CarConfigStatus.Exited)
+                        
+                        reward = self.calculate_reward(prev_action, is_collision, is_exited)
+                        
+                        collision_flag |= is_collision
+                        total_reward += reward
+                        
+                        if is_exited:
+                            car.delete()
+                            sub_ids.remove(vid)
+
+                # 다음 액션 선택 (ε=0으로 평가)
+                for vid in sub_ids:
+                    if vid not in cars:
+                        continue
+                    car = cars[vid]
+                    current_state = self.state_of(vid, sub_ids, cars)
+                    action_idx = self.agents[car.agent_type].select_action(current_state, 0.0)  # 탐험 없음
+                    
+                    car.set_speed(self.veh_speeds[action_idx])
+                    car.set_action_history(current_state, action_idx)
+
+                if collision_flag:
+                    break
+                elif all(car.is_exited() for car in cars.values()):
+                    successes += 1
+                    break
+            
+            rewards.append(total_reward)
+            steps += step
+            
+        return np.mean(rewards), successes / n_episodes * 100, steps / n_episodes
+
+    def initialize_data_structure(self):
+        """데이터 구조 초기화"""
+        return {
             "episodes": [],
             'success_rate': [], 
             'total_reward': [],
@@ -299,59 +392,57 @@ class AIM:
                 'TD-error': [],
                 'step': 0
             } for agent in AgentType}
-        }        
+        }
+    
+    def save_models(self):
+        for agent_type in AgentType:
+            torch.save(self.agents[agent_type].q_net.state_dict(), f"./{agent_type.value}_weight.pth")
+            print(f"Model saved: {agent_type.value}")
+
+    def start(self):
+        libsumo.start([self.cmd] + self.sim_cfg)
+
+        start_time = time.time()
+        data = self.initialize_data_structure()
         
         for scen_idx in range(1, self.config.MAX_SCENARIOS+1):
-            cars = self.spawn_scenario()                       # 차량 배치
-            result, _, training_data = self.simulate_single(cars, scen_idx)
+            self.logged_agents.clear()
+            cars = self.spawn_scenario()
+            step = 0
 
-            if result == SimulationState.NotEnd:
-                raise Exception(f'scenario not end in id:{scen_idx}')
-            
-            for name, values in training_data.items():
-                if not values:
-                    continue
+            while step < self.config.MAX_STEPS:
+                libsumo.simulationStep()
+                step += 1
 
-                log_parts = [f"name: {name.value}"]
-                for idx, value in values.items():
-                    if value is None:
-                        continue
-                    
+                sub_ids = self.update_vehicle_states(cars)
 
-                    if isinstance(value, (float, np.floating)):
-                        log_parts.append(f"{idx}: {value:.4f}")
-                    else:
-                        log_parts.append(f"{idx}: {value}")
+                if step > 1:
+                    training_results, collision_occurred = self.process_transitions_and_train(cars, sub_ids, scen_idx)
 
-                    if idx == "step":
-                        data[name.value][idx] = value
-                    elif idx == "Q-mean" or idx == "Q-std" or idx == "TD-error":
-                        data[name.value][idx].append(value)
+                    if training_results:
+                        self.log_training_progress(training_results, data)
+                else:
+                    collision_occurred = False
 
-                if log_parts:
-                    print(", ".join(log_parts))
+                sim_state = self.check_termination_conditions(cars, collision_occurred)
+                if sim_state == SimulationState.Collsion:
+                    break
+                elif sim_state == SimulationState.Clear:
+                    break
+
+                self.select_and_execute_actions(cars, sub_ids)
+
+            if step >= self.config.MAX_STEPS:
+                raise Exception(f'Scenario {scen_idx} did not terminate properly')
 
             if scen_idx % self.config.LOG_INTERVAL == 0:
-                avg_reward, success_rate = self.evaluate_policy(50)
-
-                data["episodes"].append(scen_idx)
-                data["total_reward"].append(avg_reward)
-                data["success_rate"].append(success_rate)
-
-                cur = time.time()
-                log_scenario(scen_idx, avg_reward, success_rate, self.epsilon, cur - start_time)
-                start_time = cur
+                start_time = self.evaluate_and_log_performance(scen_idx, data, start_time)
 
             self.epsilon = max(self.config.EPS_END, self.epsilon - self.config.EPS_DECAY)
             libsumo.load(self.sim_cfg)
 
-        for agent_type in AgentType:
-            torch.save(self.agents[agent_type].q_net.state_dict(), f"./{agent_type.value}_weight.pth")
-            print(f"save parameter! name: {agent_type.value}")
-
-        print(data)
+        self.save_models()
         plot_agent_performance(data, "agent_performance.png")
-
 
 aim = AIM()
 
