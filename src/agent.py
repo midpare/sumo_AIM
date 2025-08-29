@@ -23,7 +23,7 @@ class D3QNAgent:
 
         self.gamma = gamma
         self.batch_size = batch_size
-        self.update_freq = update_freq  # target network update
+        self.update_freq = update_freq  
         self.starter, self.ender = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
         self.step = 0
 

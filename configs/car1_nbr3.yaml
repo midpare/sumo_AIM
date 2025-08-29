@@ -10,7 +10,7 @@ agent:
     beta: 0.4
     beta_increment: 0.000001
 
-MAX_SCENARIOS   : 30000       # 학습에 돌릴 총 시나리오 수
+MAX_SCENARIOS   : 10000       # 학습에 돌릴 총 시나리오 수
 MAX_STEPS       : 1000
 EPS_START       : 1.0
 EPS_END         : 0.05

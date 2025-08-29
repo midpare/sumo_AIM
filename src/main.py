@@ -46,6 +46,7 @@ class AIM:
         self.veh_speeds = [i * self.config.MAX_SPEED / (self.config.DIVISION - 1) 
                           for i in range(self.config.DIVISION)]
         
+        self.veh_speeds[0] = 1
         self.logged_agents = set()
         self.agents = {
             AgentType.LEFT: self.create_agent(AgentType.LEFT.value),
@@ -252,7 +253,7 @@ class AIM:
             car.set_speed(self.veh_speeds[action_idx])
             car.set_action_history(current_state, action_idx)
 
-    def process_transitions_and_train(self, cars: dict[str, Car], sub_ids: list[str], scen_idx: int):
+    def process_transitions_and_train(self, cars: dict[str, Car], sub_ids: list[str], scen_idx: int, step: int):
         should_log_scenario = (scen_idx % self.config.LOG_INTERVAL) == 0
         training_results = {}
         collision_occurred = False
@@ -274,13 +275,13 @@ class AIM:
             is_exited = (config_status == CarConfigStatus.Exited)
             done = is_collision or is_exited
             
-            reward = self.calculate_reward(prev_action, is_collision, is_exited)
+            reward = self.calculate_final_reward(prev_action, is_collision, is_exited, car, sub_ids, cars, step)
             
             collision_occurred |= is_collision
             
             agent = self.agents[car.agent_type]
             
-            if config_status == (CarConfigStatus.Entered or CarConfigStatus.Exited):
+            if config_status in [CarConfigStatus.Entered, CarConfigStatus.Exited]:
                 agent.store(prev_state, prev_action, reward, current_state, done)
 
             if is_exited:
@@ -298,16 +299,69 @@ class AIM:
                  
         return training_results, collision_occurred
         
-    def calculate_reward(self, action_idx: int, is_collision: bool, is_exited: bool) -> float:
+    def calculate_reward(self, action_idx: int, is_collision: bool, is_exited: bool, 
+                        car: Car, sub_ids: list, cars: dict[str, Car]) -> float:
+        
+        # 기본 이동 보상 (최소한만)
+        speed = self.veh_speeds[action_idx]
+        base_reward = 0.01 * (speed / self.config.MAX_SPEED) if speed > 0 else -0.02
+        
+        # 안전 거리 유지 보상 (핵심)
+        safety_reward = self.calculate_safety_reward(car, sub_ids, cars)
+        base_reward += safety_reward
+        
+        # 최종 결과만 큰 보상
         if is_collision:
-            reward = -10.0
+            base_reward -= 1.5
         elif is_exited:
-            reward = 4.0
+            base_reward += 2.0
+        
+        return base_reward
+    def get_min_distance_to_others(self, car: Car, sub_ids: list, cars: dict) -> float:
+        ego_x, ego_y = car.get_pos()
+        min_distance = float('inf')
+        
+        for other_id in sub_ids:
+            if other_id == car.vehID or other_id not in cars:
+                continue
+                
+            other_car = cars[other_id]
+            ox, oy = other_car.get_pos()
+            distance = np.hypot(ego_x - ox, ego_y - oy)
+            min_distance = min(min_distance, distance)
+        
+        return min_distance
+    
+    def calculate_safety_reward(self, car: Car, sub_ids: list, cars) -> float:
+        min_distance = self.get_min_distance_to_others(car, sub_ids, cars)
+        
+        if min_distance == float('inf'):
+            return 0.0
+        
+        # 안전거리만 평가
+        if min_distance < 3.0:
+            return -0.1 * (4.0 - min_distance)  # 3m 이하에서 페널티
+        elif min_distance > 6.0:
+            return 0.02  # 충분한 거리 유지시 소량 보상
         else:
-            reward = self.veh_speeds[action_idx] * self.DT / 5 if self.veh_speeds[action_idx] > 0 else -0.1
-            
-        return reward
+            return 0.0
 
+    def calculate_final_reward(self, action_idx: int, is_collision: bool, is_exited: bool, 
+                            car: Car, sub_ids: list, cars: dict[str, Car], step: int) -> float:
+        total_reward = 0.0
+        
+        speed = self.veh_speeds[action_idx] 
+        total_reward += 0.01 * (speed / self.config.MAX_SPEED) if speed > 0 else -0.01
+        
+        total_reward += self.calculate_safety_reward(car, sub_ids, cars)
+                
+        if is_collision:
+            total_reward -= 1.0
+        elif is_exited:
+            time_bonus = max(0, 50 - step) * 0.01
+            total_reward += 1.5 + time_bonus
+        
+        return np.clip(total_reward, -1.5, 2.0)
     def check_termination_conditions(self, cars: dict[str, Car], collision_occurred: bool) -> SimulationState:
         if collision_occurred:
             return SimulationState.Collsion
@@ -349,7 +403,7 @@ class AIM:
                         is_collision = self.check_collision(vid, sub_ids, cars)
                         is_exited = (config_status == CarConfigStatus.Exited)
                         
-                        reward = self.calculate_reward(prev_action, is_collision, is_exited)
+                        reward = self.calculate_final_reward(prev_action, is_collision, is_exited, car, sub_ids, cars, step)
                         
                         collision_flag |= is_collision
                         total_reward += reward
@@ -417,7 +471,7 @@ class AIM:
                 sub_ids = self.update_vehicle_states(cars)
 
                 if step > 1:
-                    training_results, collision_occurred = self.process_transitions_and_train(cars, sub_ids, scen_idx)
+                    training_results, collision_occurred = self.process_transitions_and_train(cars, sub_ids, scen_idx, step)
 
                     if training_results:
                         self.log_training_progress(training_results, data)
@@ -425,9 +479,7 @@ class AIM:
                     collision_occurred = False
 
                 sim_state = self.check_termination_conditions(cars, collision_occurred)
-                if sim_state == SimulationState.Collsion:
-                    break
-                elif sim_state == SimulationState.Clear:
+                if sim_state in [SimulationState.Collsion, SimulationState.Clear]:
                     break
 
                 self.select_and_execute_actions(cars, sub_ids)
@@ -443,6 +495,7 @@ class AIM:
 
         self.save_models()
         plot_agent_performance(data, "agent_performance.png")
+        libsumo.close()
 
 aim = AIM()
 
